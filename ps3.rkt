@@ -71,15 +71,15 @@
              (vectorC (map parse (rest l)))]
 
             [(vector-ref)
-             ;; (vector-ref vec-expr idx-expr)
+             ;; (vector-ref vecE idxE)
              (vector-refC (parse (second l)) (parse (third l)))]
 
             [(vector-set!)
-             ;; (vector-set! vec-expr idx-expr val-expr)
+             ;; (vector-set! vecE idxE val-expr)
              (vector-set!C (parse (second l)) (parse (third l)) (parse (fourth l)))]
 
             [(vector-length)
-             ;; (vector-length vec-expr)
+             ;; (vector-length vecE)
              (vector-lengthC (parse (second l)))]
 
             [(vector-make)
@@ -87,7 +87,7 @@
              (vector-makeC (parse (second l)) (parse (third l)))]
 
             [(subvector)
-             ;; (subvector vec-expr offset-expr len-expr)
+             ;; (subvector vecE offset-expr len-expr)
              (subvectorC (parse (second l)) (parse (third l)) (parse (fourth l)))]
 
             ;; ------------------------------------------------
@@ -123,10 +123,10 @@
 (define-type Value
   [numV (n : number)]
   [boolV (b : boolean)]
-  [pairV (left : Value) (right : Value)]
+  [pairV (fst : Value) (snd : Value)]
   [closV (arg : symbol) (body : Expr) (env : Env)]
   [boxV (loc : Location)]
-  [vectorV (vec-data : (listof Value))]
+  [vectorV (loc : (listof Location)) (offset : number) (len : number)]
   )
 
 ;; Environment mapping identifiers to Values.
@@ -134,7 +134,6 @@
   [bind (name : symbol) (val : Value)])
 
 (define-type-alias Env (listof Binding))
-
 (define empty-env empty)
 
 (define (extend-env (env : Env) (x : symbol) (v : Value)) : Env
@@ -151,10 +150,9 @@
 
 ;; Store: list of Cells
 (define-type Cell
-  [cell (where : Location) (val : Value)])
+  [cell (location : Location) (val : Value)])
 
 (define-type-alias Store (listof Cell))
-
 (define empty-store empty)
 
 ;; fresh location (classic lecture6 trick: next index is (length sto))
@@ -162,58 +160,47 @@
   (length sto))
 
 ;; look up the Value at a given Location
-(define (store-ref (sto : Store) (loc : Location)) : Value
+(define (store-fetch (sto : Store) (loc : Location)) : Value
   (cond
     [(empty? sto)
-     (error 'store-ref "invalid location")]
+     (error 'store-fetch "invalid location")]
     [else
-     (if (= loc (cell-where (first sto)))
+     (if (equal? loc (cell-location (first sto)))
          (cell-val (first sto))
-         (store-ref (rest sto) loc))]))
+         (store-fetch (rest sto) loc))]))
 
 ;; update a given Location in the store, returning a new store
-(define (store-set (sto : Store) (loc : Location) (v : Value)) : Store
+(define (store-update (sto : Store) (loc : Location) (v : Value)) : Store
   (cond
     [(empty? sto)
-     (error 'store-set "invalid location")]
+     (error 'store-update "invalid location")]
     [else
-     (if (= loc (cell-where (first sto)))
+     (if (equal? loc (cell-location (first sto)))
          (cons (cell loc v) (rest sto))
          (cons (first sto)
-               (store-set (rest sto) loc v)))]))
+               (store-update (rest sto) loc v)))]))
 
 ;; allocate a new location to hold v, return loc + new store
 (define-type AllocResult
   [alloc-res (loc : Location) (store : Store)])
 
+;; Allocate a new cell in the store to hold v,
+;; returning the fresh location and the updated store.
 (define (store-alloc (sto : Store) (v : Value)) : AllocResult
   (let ([newloc (alloc-location sto)])
-    (alloc-res newloc
-               (cons (cell newloc v) sto))))
+    (alloc-res newloc (cons (cell newloc v) sto))))
 
 ;; The result of evaluating an Expr is a Value plus updated Store.
 (define-type Res
-  [res (v : Value) (s : Store)])
+  [res (v : Value) (s : Store)] )
 
 ;; eval-expr : Expr Env Store -> Res
 ;; returns a runtime Value and the new Store
 (define (eval-expr (e : Expr) (env : Env) (sto : Store)) : Res
   (type-case Expr e
-
-    ;; --------------------------------------------------------
-    ;; literals
     [numC (n) (res (numV n) sto)]
     [boolC (b) (res (boolV b) sto)]
-
-    ;; --------------------------------------------------------
-    ;; arithmetic
     [plusC (e1 e2)
-           ;; (+ e1 e2)
-           ;; TODO:
-           ;; 1. eval e1
-           ;; 2. eval e2 with new store
-           ;; 3. ensure both are numV
-           ;; 4. return numV of their sum
            (let* ([r1 (eval-expr e1 env sto)]
                   [v1 (res-v r1)]
                   [sto1 (res-s r1)]
@@ -222,8 +209,6 @@
                   [sto2 (res-s r2)]) (res (numV (+ (numV-n v1) (numV-n v2))) sto2))]
 
     [timesC (e1 e2)
-            ;; (* e1 e2)
-            ;; TODO similar to plusC but multiply
             (let* ([r1 (eval-expr e1 env sto)]
                    [v1 (res-v r1)]
                    [sto1 (res-s r1)]
@@ -231,14 +216,7 @@
                    [v2 (res-v r2)]
                    [sto2 (res-s r2)]) (res (numV (* (numV-n v1) (numV-n v2))) sto2))]
 
-    ;; --------------------------------------------------------
-    ;; equal? and if
     [equal?C (e1 e2)
-             ;; (equal? e1 e2)
-             ;; TODO:
-             ;; 1. eval e1/e2
-             ;; 2. compare them appropriately
-             ;; 3. return boolV
              (let* ([r1 (eval-expr e1 env sto)]
                     [v1 (res-v r1)]
                     [sto1 (res-s r1)]
@@ -246,70 +224,48 @@
                     [v2 (res-v r2)]
                     [sto2 (res-s r2)]) (res (boolV (equal? v1 v2)) sto2))]
 
-    [ifC (testE thenE elseE)
-         ;; (if testE thenE elseE)
-         ;; TODO:
-         ;; 1. eval testE
-         ;; 2. ensure boolV
-         ;; 3. depending on bool, eval thenE or elseE
-         (let* ([rtest (eval-expr testE env sto)]
+    [ifC (guard e1 e2)
+         (let* ([rtest (eval-expr guard env sto)]
                 [vtest (res-v rtest)]
                 [stest (res-s rtest)])
-           ;; TODO type-check boolV
            (if (boolV-b vtest)
-               (eval-expr thenE env stest)
-               (eval-expr elseE env stest)))]
+               (eval-expr e1 env stest)
+               (eval-expr e2 env stest)))]
 
-    ;; --------------------------------------------------------
-    ;; variables and let
-    [idC (x)
-         ;; variable reference
-         ;; TODO: lookup x
-         (res (lookup x env) sto)]
+    [idC (x) (res (lookup x env) sto)]
 
     [letC (x e1 body)
-          ;; (let x e1 body)
-          ;; TODO:
-          ;; 1. eval e1
-          ;; 2. extend env
-          ;; 3. eval body under that env
           (let* ([r1 (eval-expr e1 env sto)]
                  [v1 (res-v r1)]
                  [sto1 (res-s r1)]
                  [env2 (extend-env env x v1)])
             (eval-expr body env2 sto1))]
 
-    ;; --------------------------------------------------------
-    ;; lambda / application
     [lambdaC (x body) (res (closV x body env) sto)]
 
     [appC (funE argE)
-      ;; (funE argE)
-      ;; TODO:
-      ;; 1. eval funE -> should be closV
-      ;; 2. eval argE
-      ;; 3. extend closure env with (param = argVal)
-      ;; 4. eval closure body in that extended env, threading store
-      (let* ([rfun (eval-expr funE env sto)]
-             [vfun (res-v rfun)]
-             [sfun (res-s rfun)]
-             [rarg (eval-expr argE env sfun)]
-             [varg (res-v rarg)]
-             [sarg (res-s rarg)])
-        ;; TODO: ensure vfun is closV, otherwise error
-        (let ([param (closV-arg vfun)]
-              [body  (closV-body vfun)]
-              [fenv  (closV-env vfun)])
-          (eval-expr body
-                     (extend-env fenv param varg)
-                     sarg)))]
+          ;; (funE argE)
+          ;; TODO:
+          ;; 1. eval funE -> should be closV
+          ;; 2. eval argE
+          ;; 3. extend closure env with (param = argVal)
+          ;; 4. eval closure body in that extended env, threading store
+          (let* ([rfun (eval-expr funE env sto)]
+                 [vfun (res-v rfun)]
+                 [sfun (res-s rfun)]
+                 [rarg (eval-expr argE env sfun)]
+                 [varg (res-v rarg)]
+                 [sto-arg (res-s rarg)])
+            ;; TODO: ensure vfun is closV, otherwise error
+            (let ([param (closV-arg vfun)]
+                  [body  (closV-body vfun)]
+                  [fenv  (closV-env vfun)])
+              (eval-expr body (extend-env fenv param varg) sto-arg))
+            )]
 
     ;; --------------------------------------------------------
     ;; pairs
     [pairC (e1 e2)
-           ;; (pair e1 e2)
-           ;; TODO:
-           ;; eval both, return pairV
            (let* ([r1 (eval-expr e1 env sto)]
                   [v1 (res-v r1)]
                   [sto1 (res-s r1)]
@@ -319,27 +275,19 @@
              (res (pairV v1 v2) sto2))]
 
     [fstC (e1)
-          ;; (fst e1)
-          ;; TODO:
-          ;; eval e1, ensure pairV, return left
           (let* ([r1 (eval-expr e1 env sto)]
                  [v1 (res-v r1)]
                  [sto1 (res-s r1)])
-            ;; TODO ensure pairV
-            (res (pairV-left v1) sto1))]
+            (res (pairV-fst v1) sto1))]
 
     [sndC (e1)
-          ;; (snd e1)
-          ;; TODO:
-          ;; eval e1, ensure pairV, return right
           (let* ([r1 (eval-expr e1 env sto)]
                  [v1 (res-v r1)]
                  [sto1 (res-s r1)])
-            ;; TODO ensure pairV
-            (res (pairV-right v1) sto1))]
+            (res (pairV-snd v1) sto1))]
 
     ;; --------------------------------------------------------
-    ;; boxes and mutation
+    ;; boxes
     [boxC (e1)
           ;; (box e1)
           ;; TODO:
@@ -361,9 +309,8 @@
             (let* ([r1 (eval-expr e1 env sto)]
                    [v1 (res-v r1)]
                    [sto1 (res-s r1)])
-              ;; TODO ensure v1 is boxV
               (let ([loc (boxV-loc v1)])
-                (res (store-ref sto1 loc) sto1)))]
+                (res (store-fetch sto1 loc) sto1)))]
 
     [setboxC (e1 e2)
              ;; (set-box! e1 e2)
@@ -378,90 +325,207 @@
                     [r2 (eval-expr e2 env sto1)]
                     [v2 (res-v r2)]
                     [sto2 (res-s r2)])
-               ;; TODO ensure v1 is boxV
                (let* ([loc (boxV-loc v1)]
-                      [s3  (store-set sto2 loc v2)])
-                 (res v2 s3)))]
+                      [sto3  (store-update sto2 loc v2)])
+                 (res v2 sto3)))]
 
     ;; --------------------------------------------------------
     ;; vectors
-    ;; These are still TODO-heavy: you'll define how vectorV works.
-
     [vectorC (elems)
-             ;; (vector e1 e2 ... en)
-             ;; elems : (listof Expr) from parser
-             ;; TODO:
-             ;; 1. eval each elem left-to-right, threading store
-             ;; 2. allocate a mutable backing structure
-             ;; 3. wrap in vectorV
-             (error 'eval-expr "TODO: vectorC evaluation")]
+             (cond
+               [(empty? elems) (res (vectorV empty 0 0) sto)]
+               [else
+                (let* ([r1 (eval-expr (first elems) env sto)]
+                       [v1 (res-v r1)]
+                       [sto1 (res-s r1)]
+                       [ar1 (store-alloc sto1 v1)]
+                       [loc1 (alloc-res-loc ar1)]
+                       [sto2  (alloc-res-store ar1)]
+                       [rtail (eval-expr (vectorC (rest elems)) env sto2)]
+                       [vtail (res-v rtail)]
+                       [stail (res-s rtail)])
+                  (type-case Value vtail
+                    [vectorV (loc-tail off-tail len-tail)
+                             (let* ([new-loc (cons loc1 loc-tail)]
+                                    [new-len (+ 1 len-tail)])
+                               (res (vectorV new-loc 0 new-len) stail))]
+                    [else (error 'eval-expr "internal vectorC invariant broken")])
+                  )]
+               )]
 
-    [vector-refC (vec-expr idx-expr)
-                 ;; (vector-ref vec idx)
-                 ;; TODO:
-                 ;; 1. eval vec-expr -> vectorV
-                 ;; 2. eval idx-expr -> numV
-                 ;; 3. read that element
-                 (error 'eval-expr "TODO: vector-refC evaluation")]
+    [vector-refC (vecE idxE)
+                 ;; (vector-ref v i)
+                 (let* ([rvec (eval-expr vecE env sto)]
+                        [vvec (res-v rvec)]
+                        [svec (res-s rvec)])
+                   (type-case Value vvec
+                     [vectorV (loc offset vlen)
+                              (let* ([ridx (eval-expr idxE env svec)]
+                                     [vidx (res-v ridx)]
+                                     [sidx (res-s ridx)])
+                                (type-case Value vidx
+                                  [numV (n)
+                                        ;; find location of element (offset + n) in loc
+                                        (let* ([target-index (+ offset n)]
+                                               [target-loc (list-ref loc target-index)]
+                                               [elem-val (store-fetch sidx target-loc)])
+                                          (res elem-val sidx))]
+                                  [else (error 'eval-expr "vector-ref index not a number")])
+                                )]
+                     [else (error 'eval-expr "vector-ref on non-vector")])
+                   )]
 
-    [vector-set!C (vec-expr idx-expr val-expr)
+    [vector-set!C (vecE idxE val-expr)
                   ;; (vector-set! vec idx val)
                   ;; TODO:
-                  ;; 1. eval vec-expr -> vectorV
-                  ;; 2. eval idx-expr -> numV
+                  ;; 1. eval vecE -> vectorV
+                  ;; 2. eval idxE -> numV
                   ;; 3. eval val-expr
-                  ;; 4. mutate underlying storage
+                  ;; 4. mutate list-of-Values and build a new list with the index replaced.
                   ;; 5. return (probably the value)
-                  (error 'eval-expr "TODO: vector-set!C evaluation")]
+                  (let* ([rvec (eval-expr vecE env sto)]
+                         [vvec (res-v rvec)]
+                         [svec (res-s rvec)])
+                    (type-case Value vvec
+                      [vectorV (loc offset vlen)
+                               (let* ([ridx (eval-expr idxE env svec)]
+                                      [vidx (res-v ridx)]
+                                      [sidx (res-s ridx)])
+                                 (type-case Value vidx
+                                   [numV (n)
+                                         (let* ([rval (eval-expr val-expr env sidx)]
+                                                [vval (res-v rval)]
+                                                [sval (res-s rval)]
+                                                [target-index (+ offset n)]
+                                                [target-loc (list-ref loc target-index)]
+                                                [s-upd (store-update sval target-loc vval)])
+                                           (res (vectorV loc offset vlen) s-upd))]
+                                   [else (error 'eval-expr "vector-set! index not a number")])
+                                 )]
+                      [else (error 'eval-expr "vector-set! on non-vector")])
+                    )]
 
-    [vector-lengthC (vec-expr)
-                    ;; (vector-length vec)
-                    ;; TODO:
-                    ;; compute logical length of the vector/subvector
-                    (error 'eval-expr "TODO: vector-lengthC evaluation")]
+    [vector-lengthC (vecE)
+                    (let* ([rvec (eval-expr vecE env sto)]
+                           [vvec (res-v rvec)]
+                           [svec (res-s rvec)])
+                      (type-case Value vvec
+                        [vectorV (loc offset vlen)
+                                 (res (numV vlen) svec)]
+                        [else
+                         (error 'eval-expr "vector-length on non-vector")]))]
 
+;    [vector-makeC (len-expr init-expr)
+;                  (let* ([rlen  (eval-expr len-expr env sto)]
+;                         [vlen  (res-v rlen)]
+;                         [slen  (res-s rlen)])
+;                    (type-case Value vlen
+;                      [numV (n)
+;                            (let* ([rinit (eval-expr init-expr env slen)]
+;                                   [vinit (res-v rinit)]
+;                                   [sinit (res-s rinit)])
+;                              (letrec ([build
+;                                        (lambda (k cur-store acc-locs)
+;                                          (if (zero? k)
+;                                              (values acc-locs cur-store)
+;                                              (let* ([ar (store-alloc cur-store vinit)]
+;                                                     [new-loc    (alloc-res-loc ar)]
+;                                                     [new-store  (alloc-res-store ar)])
+;                                                (build (- k 1) new-store (cons new-loc acc-locs)))
+;                                              ))
+;                                        ])
+;                                (let-values ([(locs-rev final-store) (build n sinit empty)])
+;                                  (let ([locs-in-order (reverse locs-rev)])
+;                                    (res (vectorV locs-in-order 0 n) final-store))))
+;                              )]
+;                      [else (error 'eval-expr "vector-make length not a number")])
+;                    )]
+    
     [vector-makeC (len-expr init-expr)
-                  ;; (vector-make n init)
-                  ;; TODO:
-                  ;; 1. eval n -> numV
-                  ;; 2. eval init
-                  ;; 3. allocate new mutable vector of length n
-                  (error 'eval-expr "TODO: vector-makeC evaluation")]
+                  ;; (vector-make n v)
+                  ;; 1. evaluate n -> must be a number
+                  ;; 2. evaluate v -> initial element value
+                  ;; 3. allocate n cells in the store, each holding that value
+                  ;; 4. build (vectorV loc 0 n), where loc is the list of those Locations
+                  ;; 5. return (res that-vector final-store)
+                  (let* ([rlen  (eval-expr len-expr env sto)]
+                         [vlen  (res-v rlen)]
+                         [slen  (res-s rlen)])
+                    (type-case Value vlen
+                      [numV (n)
+                            ;; evaluate the initializer in the updated store from length
+                            (let* ([rinit (eval-expr init-expr env slen)]
+                                   [vinit (res-v rinit)]
+                                   [sinit (res-s rinit)])
+                              ;; build : number Store (listof Location) -> Res
+                              ;; allocates k copies of vinit, threading the store.
+                              ;; acc-rev is the list of element locations we've allocated so far,
+                              ;; in reverse order (we'll reverse once at the end).
+                              (letrec ([build
+                                        (lambda (k cur-store acc-rev)
+                                          (if (zero? k)
+                                              ;; done:
+                                              ;; reverse acc-rev to get locations in index order
+                                              ;; index 0 should correspond to the first allocated location
+                                              (let ([loc-list (reverse acc-rev)])
+                                                ;; vectorV wants:
+                                                ;;   loc    : (listof Location) = loc-list
+                                                ;;   offset : number            = 0
+                                                ;;   len    : number            = n
+                                                (res (vectorV loc-list 0 n) cur-store))
+                                              ;; otherwise allocate one more cell for vinit
+                                              (let* ([ar        (store-alloc cur-store vinit)]
+                                                     [new-loc   (alloc-res-loc ar)]
+                                                     [new-store (alloc-res-store ar)])
+                                                (build (- k 1)
+                                                       new-store
+                                                       (cons new-loc acc-rev))))
+                                          )])
+                                ;; kick off the allocator with k = n, starting store = sinit,
+                                ;; and an empty accumulator of locations
+                                (build n sinit empty))
+                              )]
+                      [else (error 'eval-expr "vector-make length not a number")])
+                    )]
 
-    [subvectorC (vec-expr off-expr len-expr)
-                ;; (subvector vec off len)
-                ;; TODO:
-                ;; 1. eval vec-expr -> vectorV
-                ;; 2. eval off, len as numbers
-                ;; 3. return vectorV view sharing same underlying data
-                (error 'eval-expr "TODO: subvectorC evaluation")]
+    [subvectorC (vecE off-expr len-expr)
+                (let* ([rvec (eval-expr vecE env sto)]
+                       [vvec (res-v rvec)]
+                       [svec (res-s rvec)])
+                  (type-case Value vvec
+                    [vectorV (loc base-off base-len)
+                             (let* ([roff (eval-expr off-expr env svec)]
+                                    [voff (res-v roff)]
+                                    [soff (res-s roff)])
+                               (type-case Value voff
+                                 [numV (off-n)
+                                       (let* ([rlen (eval-expr len-expr env soff)]
+                                              [vlen (res-v rlen)]
+                                              [slen (res-s rlen)])
+                                         (type-case Value vlen
+                                           [numV (len-n) (res (vectorV loc (+ base-off off-n) len-n) slen)]
+                                           [else  (error 'eval-expr "subvector len not a number")])
+                                         )]
+                                 [else (error 'eval-expr "subvector offset not a number")])
+                               )]
+                    [else (error 'eval-expr "subvector on non-vector")])
+                  )]
 
     ;; --------------------------------------------------------
     ;; begin / sequencing
     [beginC (es)
-        ;; (begin e1 e2 ... en)
-        ;; Semantics:
-        ;; - evaluate e1, then e2, ..., returning the last value/store
-        ;; We do this structurally, by reducing (begin e1 e2 ... en)
-        ;; to either just e1 (if it's the only one)
-        ;; or: eval e1 for effects, then eval (begin e2 ... en).
-        (cond
-          [(empty? es)
-           (error 'beginC "begin with no subexpressions")]
+            (cond
+              [(empty? es)
+               (error 'beginC "begin with no subexpressions")]
 
-          [(empty? (rest es))
-           ;; only one expression in the begin: just eval it
-           (eval-expr (first es) env sto)]
+              [(empty? (rest es))
+               (eval-expr (first es) env sto)]
 
-          [else
-           ;; there's at least e1 and e2.
-           ;; Step 1: eval e1 for its effects on the store
-           (let* ([r1 (eval-expr (first es) env sto)]
-                  [sto1 (res-s r1)])
-             ;; Step 2: evaluate (begin e2 ... en) starting from that new store
-             ;; We literally construct a smaller beginC node and reuse eval-expr,
-             ;; so we don't write our own recursion (so no letrec needed).
-             (eval-expr (beginC (rest es)) env sto1))])]
+              [else
+               (let* ([r1 (eval-expr (first es) env sto)]
+                      [sto1 (res-s r1)])
+                 (eval-expr (beginC (rest es)) env sto1))]
+              )]
 
     ;; --------------------------------------------------------
     ;; transact
@@ -474,13 +538,23 @@
                ;; 4. if commit? is #true => keep new store
                ;;    if #false => discard new store, keep old
                ;; 5. return result-val with whichever store survived
-               (let* ([original-store sto]
-                      ;; TODO you may want a 'clone-store' helper if needed
-                      [rbody (eval-expr body env original-store)]
-                      [vbody (res-v rbody)]
-                      [sbody (res-s rbody)])
-                 ;; TODO: destructure vbody as pairV(boolV commit?) resultV
-                 (error 'eval-expr "TODO: transactC evaluation"))]
+               (let ([start-store sto])
+                 (let* ([rbody (eval-expr body env sto)]
+                        [vbody (res-v rbody)]
+                        [sbody (res-s rbody)])
+                   (type-case Value vbody
+                     [pairV (firstv secondv)
+                            (type-case Value firstv
+                              [boolV (b)
+                                     (if b
+                                         (res secondv sbody)       ;; commit
+                                         (res secondv start-store) ;; rollback
+                                         )]
+                              [else
+                               (error 'eval-expr "transact did not return (pair boolean value)")])]
+                     [else
+                      (error 'eval-expr "transact did not return a pair")]))
+                 )]
 
     ))
 
@@ -504,60 +578,9 @@
                          (error 'eval-base "function values are not base")]
                   [boxV (loc)
                         (error 'eval-base "box values are not base")]
-                  [vectorV (vec-data)
+                  [vectorV (loc offset len)
                            (error 'eval-base "vector values are not base")]
                   ))
               ])
       (value->base v)))
   )
-
-
-;; ============================================================
-;; ps3.rkt
-;;
-;; You'll implement:
-;;   - parse : s-expression -> Expr
-;;   - eval-base : Expr -> BaseValue
-;;
-;; See README.md and ps3-ast.rkt for spec of each construct.
-;; ============================================================
-
-
-;; ------------------------------------------------------------
-;; ENV / STORE / VALUES / RESULT
-;; (You will flesh these out to match lecture6-style store passing.)
-;; ------------------------------------------------------------
-
-;; TODO: define types for runtime Values, Store, Locations, etc.
-;; Similar to lecture6 / lecture7d:
-;;   - numbers, booleans
-;;   - closures (for lambda)
-;;   - boxes
-;;   - pairs
-;;   - vectors / subvectors (must support shared mutation!)
-;;   - probably a Result type like (res Value Store)
-
-;; (define-type-alias Location number)
-;; (define-type Storage
-;;   [cell (location : Location) (val : Value)])
-;; (define-type-alias Store (listof Storage))
-;; (define empty-store ...)
-;; (define override-store ...)
-
-;; (define-type Value
-;;   [numV ...]
-;;   [boolV ...]
-;;   [closV ...]        ; closure (env x body)
-;;   [boxV ...]         ; box location
-;;   [pairV ...]        ; pair of Values
-;;   [vectorV ...]      ; vector representation (backed by store/shared data)
-;;   ...)
-;;
-;; (define-type Binding
-;;   [bind (name : symbol) (val : Value)])
-;; (define-type-alias Env (listof Binding))
-;; (define empty-env ...)
-;; (define extend-env ...)
-;;
-;; lookup : symbol Env -> Value
-;; TODO: implement like lecture6 lookup
