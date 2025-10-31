@@ -63,17 +63,14 @@
             ;; ======== BOXES ========
             [(box)
              ;; (box e)
-             ;; TODO boxC
              (boxC (parse (second l)))]
 
             [(unbox)
              ;; (unbox e)
-             ;; TODO unboxC
              (unboxC (parse (second l)))]
 
             [(set-box!)
              ;; (set-box! e1 e2)
-             ;; TODO setboxC
              (setboxC (parse (second l)) (parse (third l)))]
 
             ;; ======== VECTORS ========
@@ -84,12 +81,12 @@
              ;; We didn't yet see its name in the snippet, but we KNOW we need:
              ;;   - vectorC OR something equivalent
              ;; TODO vector literal constructor
-             (error 'parse "TODO: vector literal constructor not implemented")]
+             (vectorC (map parse (rest l)))]
 
             [(vector-ref)
              ;; (vector-ref vec-expr idx-expr)
              ;; TODO vector-refC
-             (error 'parse "TODO: vector-refC not implemented")]
+             (vector-refC (parse (second l)) (parse (third l)))]
 
             [(vector-set!)
              ;; (vector-set! vec-expr idx-expr val-expr)
@@ -98,7 +95,7 @@
             [(vector-length)
              ;; (vector-length vec-expr)
              ;; TODO vector-lengthC
-             (error 'parse "TODO: vector-lengthC not implemented")]
+             (vector-lengthC (parse (second l)))]
 
             [(vector-make)
              ;; (vector-make n-expr init-expr)
@@ -138,7 +135,6 @@
 (define (eval-base (e : Expr)) : BaseValue
   (error 'eval-base "Not yet implemented.")
   )
-
 
 
 ;; ============================================================
